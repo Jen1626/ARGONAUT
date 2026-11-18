@@ -62,6 +62,7 @@ export default function Home(){
    <main className="dashboard">
     <header className="topbar"><div><span className="live-pill"><i/> {dash?.mode==="demo"?"DEMO NETWORK":"LIVE DATA"}</span><span className="crumb"> / Command Center</span></div><button onClick={()=>{localStorage.removeItem("argo-auth");location.reload()}}>Sign out</button></header>
     <section className="welcome"><div><p className="eyebrow">OCEAN INTELLIGENCE PLATFORM</p><h1>Good to see you, <em>Researcher.</em></h1><p>Ask ARGONAUT anything about the world's autonomous ocean observing network.</p></div><div className="date-chip">◷ {today || "Today"}</div></section>
+    <div className={`data-note ${dash?.mode==="live"?"data-live":"data-demo"}`}>{dash?.data_note || "Connecting to the ocean data service…"}</div>
     <section className="metrics">
       <Metric icon="◉" value={dash?.active_floats??"—"} label="Active Floats" sub="Global network"/>
       <Metric icon="≈" value={dash?`${dash.ocean_temperature}°C`:"—"} label="Surface Temp." sub="Network average"/>
