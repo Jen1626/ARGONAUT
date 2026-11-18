@@ -198,11 +198,12 @@ class DataEngine:
     def plot(self,wmo,plot_type):
         rows,_=self.rows_for(wmo)
         if plot_type=="ts_diagram":
-            pts=[{"temperature":x["temperature"],"salinity":x["salinity"],"cycle":x["cycle"]}
-                 for x in rows]
+            pts=[{"temperature":x["temperature"],"salinity":x["salinity"],"cycle":x.get("cycle")}
+                 for x in rows if x.get("temperature") is not None and x.get("salinity") is not None]
         else:
             v="salinity" if "salinity" in plot_type else "density" if "density" in plot_type else "temperature"
-            pts=[{"depth":x["pressure"],v:x[v],"cycle":x["cycle"],"time":x["time"]} for x in rows]
+            pts=[{"depth":x["pressure"],v:x[v],"cycle":x.get("cycle"),"time":x.get("time")}
+                 for x in rows if x.get("pressure") is not None and x.get(v) is not None]
         return {"wmo":wmo,"plot_type":plot_type,"points":pts[:3000]}
 
     def trajectory(self,wmo):
