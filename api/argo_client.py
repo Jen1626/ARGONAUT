@@ -51,8 +51,24 @@ class ArgovisClient:
         return payload
 
     @staticmethod
+    def _flatten_profiles(payload) -> list[dict]:
+        """Normalize Argovis responses that may contain nested profile lists."""
+        if isinstance(payload, dict):
+            return [payload]
+        if isinstance(payload, list):
+            profiles = []
+            for item in payload:
+                profiles.extend(ArgovisClient._flatten_profiles(item))
+            return profiles
+        return []
+
+    @staticmethod
     def _profile_rows(profile: dict) -> list[dict]:
+        if not isinstance(profile, dict):
+            return []
         data, info = profile.get("data") or [], profile.get("data_info") or []
+        if not isinstance(data, list) or not isinstance(info, list):
+            return []
         keys = info[0] if info and isinstance(info[0], list) else []
         if not data or not keys:
             return []
@@ -130,6 +146,7 @@ class ArgovisClient:
                         raise
             if profiles is None:
                 raise last_error or ArgovisError("Argovis returned no result.")
-        rows = [row for profile in profiles for row in self._profile_rows(profile)]
+        normalized_profiles = self._flatten_profiles(profiles)
+        rows = [row for profile in normalized_profiles for row in self._profile_rows(profile)]
         self._cache[cache_key] = (time.time(), rows)
         return rows
