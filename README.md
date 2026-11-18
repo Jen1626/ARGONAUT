@@ -20,7 +20,16 @@ A Vercel-ready full-stack ocean intelligence dashboard for exploring ARGO-style 
 
 ## Important data note
 
-The project starts with deterministic **synthetic ARGO-style demo observations** so the UI works immediately without depending on an external ocean-data service. The dashboard labels this as `DEMO NETWORK`.
+The application now attempts to retrieve **real Argo profile measurements from the Argovis API** first. It requests temperature, salinity and pressure, converts Argovis profile JSON into chart-ready depth rows, and caches results in the running API process for 10 minutes. The dashboard shows a live-data notice when real profiles are returned. If Argovis is unavailable, rate-limited, or returns no matching profiles, the app falls back to synthetic data and labels it clearly as demo data.
+
+### Configure an Argovis API key (recommended)
+
+1. Request a free key at https://argovis-keygen.colorado.edu/.
+2. In Vercel, open your project → **Settings → Environment Variables**.
+3. Add `ARGOVIS_API_KEY` with the key you received. Apply it to Production (and Preview if you use it).
+4. Redeploy the project so the serverless API receives the new variable.
+
+The key is read only by the Python backend. Do not put it in a `NEXT_PUBLIC_*` variable or commit it to GitHub. The client uses the Argovis `x-argokey` request header. Guest access may be rate-limited.
 
 For real observations, add files such as:
 
@@ -34,7 +43,7 @@ The engine recognizes these columns (case-insensitive aliases are supported):
 TIME, PRES, TEMP, PSAL, PDEN, CYCLE_NUMBER, LATITUDE, LONGITUDE
 ```
 
-Real-data ingestion is local-file based in this V3 build. A production deployment that downloads large NetCDF/FTP datasets per request should use durable object storage or a dedicated data-processing service instead of doing heavy processing inside a Vercel Function.
+Local CSV ingestion remains available and takes priority for a requested WMO float when a matching file exists. Argovis live retrieval is limited to recent profile queries and is not a replacement for a full historical NetCDF archive. For large-scale research workloads, use durable object storage or a dedicated data-processing service rather than downloading large datasets inside a Vercel Function.
 
 ## Project structure
 

@@ -1,7 +1,12 @@
 from datetime import datetime, timedelta
-import math, re, random
+import math, re, random, logging
 import pandas as pd
 from pathlib import Path
+
+try:
+    from .argo_client import ArgovisClient, ArgovisError
+except ImportError:  # Vercel may load api/ as the function import root
+    from argo_client import ArgovisClient, ArgovisError
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "backend" / "data"
 
@@ -18,6 +23,7 @@ class DataEngine:
     def __init__(self):
         self.rng = random.Random(42)
         self.demo = self._make_demo_data()
+        self.argovis = ArgovisClient()
 
     def _make_demo_data(self):
         rows = []
@@ -78,12 +84,23 @@ class DataEngine:
             if item: out.append(item)
         return out
 
-    def rows_for(self, wmo=None):
+    def rows_for(self, wmo=None, region="global"):
         if wmo:
-            local=self._local(wmo)
-            if local: return [{**x,"wmo":wmo} for x in local], "local_csv"
-        rows=[x for x in self.demo if not wmo or x["wmo"]==str(wmo)]
-        return rows, "demo"
+            local = self._local(wmo)
+            if local:
+                return [{**x, "wmo": wmo} for x in local], "local_csv"
+        try:
+            live_rows = self.argovis.fetch(wmo=wmo, region=region)
+            if live_rows:
+                return live_rows, "argovis_live"
+            logging.warning("Argovis returned zero parsed observations (wmo=%s, region=%s)", wmo, region)
+            return [], "argovis_live_empty"
+        except ArgovisError as exc:
+            # Log the provider error for Vercel Runtime Logs without exposing
+            # credentials to the client response.
+            logging.exception("Argovis request failed (wmo=%s, region=%s): %s", wmo, region, exc)
+            fallback = [x for x in self.demo if (not wmo or x["wmo"] == str(wmo))]
+            return fallback, "demo_fallback"
 
     def stats(self, rows):
         result={}
@@ -102,27 +119,33 @@ class DataEngine:
         return [x for x in rows if lat_min <= float(x.get("latitude", 0)) <= lat_max and lon_min <= float(x.get("longitude", 0)) <= lon_max]
 
     def dashboard(self):
-        rows=self.demo
-        surface=[x for x in rows if x["pressure"]<=50]
+        rows, source = self.rows_for(region="indian ocean")
+        surface = [x for x in rows if x.get("pressure") is not None and float(x["pressure"]) <= 50]
+        temp_values = [float(x["temperature"]) for x in surface if x.get("temperature") is not None]
+        sal_values = [float(x["salinity"]) for x in surface if x.get("salinity") is not None]
+        by_float = {}
+        for row in rows:
+            wmo = str(row.get("wmo", ""))
+            if not wmo:
+                continue
+            item = by_float.setdefault(wmo, {"wmo": wmo, "region": "Indian Ocean", "temp": "—", "status": "LIVE"})
+            if item["temp"] == "—" and row.get("temperature") is not None:
+                item["temp"] = f'{float(row["temperature"]):.1f}°C'
+        live = source == "argovis_live"
         return {
-            "mode": "demo",
-            "data_note": "Synthetic ARGO-style observations are used until local CSV data is added.",
-            "active_floats": len(set(x["wmo"] for x in rows)),
-            "observations": len(rows),
-            "ocean_temperature": round(sum(x["temperature"] for x in surface)/len(surface),2),
-            "salinity": round(sum(x["salinity"] for x in surface)/len(surface),2),
-            "coverage": 87.4,
-            "regions": [
-                {"name":"Arabian Sea","value":91},
-                {"name":"Bay of Bengal","value":74},
-                {"name":"Indian Ocean","value":82},
-                {"name":"North Atlantic","value":63}
-            ],
-            "recent": [
-                {"wmo":"4903775","region":"Arabian Sea","temp":"27.8°C","status":"DEMO"},
-                {"wmo":"5907085","region":"Indian Ocean","temp":"26.4°C","status":"DEMO"},
-                {"wmo":"7901136","region":"Bay of Bengal","temp":"28.1°C","status":"DEMO"},
-                {"wmo":"6901203","region":"Arabian Sea","temp":"25.9°C","status":"DEMO"}
+            "mode": "live" if live else "demo",
+            "data_note": "Live profiles retrieved from Argovis." if live else "Argovis could not be reached or returned no recent profiles. Showing clearly labelled synthetic demo observations.",
+            "active_floats": len(by_float) if live else len(set(x["wmo"] for x in self.demo)),
+            "observations": len(rows) if live else len(self.demo),
+            "ocean_temperature": round(sum(temp_values) / len(temp_values), 2) if temp_values else None,
+            "salinity": round(sum(sal_values) / len(sal_values), 2) if sal_values else None,
+            "coverage": None,
+            "regions": [],
+            "recent": list(by_float.values())[:4] if live else [
+                {"wmo": "4903775", "region": "Arabian Sea", "temp": "27.8°C", "status": "DEMO"},
+                {"wmo": "5907085", "region": "Indian Ocean", "temp": "26.4°C", "status": "DEMO"},
+                {"wmo": "7901136", "region": "Bay of Bengal", "temp": "28.1°C", "status": "DEMO"},
+                {"wmo": "6901203", "region": "Arabian Sea", "temp": "25.9°C", "status": "DEMO"}
             ]
         }
 
@@ -153,7 +176,7 @@ class DataEngine:
                 near=self.nearest(lat,lon)
                 return {"answer":f"I found {len(near)} nearby ARGO floats around {lat}°, {lon}°.",
                         "filters":p,"floats":near,"charts":{}}
-        rows,source=self.rows_for(p["wmo"])
+        rows,source=self.rows_for(p["wmo"], p["region"])
         rows=self._filter_region(rows, p["region"])
         charts={}
         for v in p["variables"]:
@@ -177,11 +200,12 @@ class DataEngine:
     def plot(self,wmo,plot_type):
         rows,_=self.rows_for(wmo)
         if plot_type=="ts_diagram":
-            pts=[{"temperature":x["temperature"],"salinity":x["salinity"],"cycle":x["cycle"]}
-                 for x in rows]
+            pts=[{"temperature":x["temperature"],"salinity":x["salinity"],"cycle":x.get("cycle")}
+                 for x in rows if x.get("temperature") is not None and x.get("salinity") is not None]
         else:
             v="salinity" if "salinity" in plot_type else "density" if "density" in plot_type else "temperature"
-            pts=[{"depth":x["pressure"],v:x[v],"cycle":x["cycle"],"time":x["time"]} for x in rows]
+            pts=[{"depth":x["pressure"],v:x[v],"cycle":x.get("cycle"),"time":x.get("time")}
+                 for x in rows if x.get("pressure") is not None and x.get(v) is not None]
         return {"wmo":wmo,"plot_type":plot_type,"points":pts[:3000]}
 
     def trajectory(self,wmo):
@@ -196,8 +220,11 @@ class DataEngine:
 
     def nearest(self,lat,lon):
         by={}
-        for x in self.demo:
-            d=self._distance(lat,lon,x["latitude"],x["longitude"])
+        rows, _ = self.rows_for(region="indian ocean")
+        for x in rows:
+            if x.get("latitude") is None or x.get("longitude") is None:
+                continue
+            d=self._distance(lat,lon,float(x["latitude"]),float(x["longitude"]))
             w=x["wmo"]
             if w not in by or d<by[w]["distance_km"]:
                 by[w]={"wmo":w,"latitude":x["latitude"],"longitude":x["longitude"],
