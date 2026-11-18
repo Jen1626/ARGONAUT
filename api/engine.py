@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-import math, re, random
+import math, re, random, logging
 import pandas as pd
 from pathlib import Path
 
@@ -93,10 +93,12 @@ class DataEngine:
             live_rows = self.argovis.fetch(wmo=wmo, region=region)
             if live_rows:
                 return live_rows, "argovis_live"
+            logging.warning("Argovis returned zero parsed observations (wmo=%s, region=%s)", wmo, region)
             return [], "argovis_live_empty"
         except ArgovisError as exc:
-            # Keep the interface usable if Argovis is temporarily unavailable,
-            # but expose the fallback source clearly to the frontend/user.
+            # Log the provider error for Vercel Runtime Logs without exposing
+            # credentials to the client response.
+            logging.exception("Argovis request failed (wmo=%s, region=%s): %s", wmo, region, exc)
             fallback = [x for x in self.demo if (not wmo or x["wmo"] == str(wmo))]
             return fallback, "demo_fallback"
 
